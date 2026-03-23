@@ -1,0 +1,36 @@
+name: Gitclaw Authorise
+description: Checks if the GitHub actor is an authorized owner, member, or collaborator.
+
+outputs:
+  authorized:
+    description: Whether the actor is authorized
+    value: ${{ steps.auth.outputs.authorized }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check authorization
+      id: auth
+      shell: bash
+      run: |
+        if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+          ASSOCIATION="${{ github.event.comment.author_association }}"
+          LOGIN="${{ github.event.comment.user.login }}"
+        else
+          ASSOCIATION="${{ github.event.issue.author_association }}"
+          LOGIN="${{ github.event.issue.user.login }}"
+        fi
+
+        if [[ "$LOGIN" == "github-actions[bot]" ]]; then
+          echo "authorized=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::Skipping — actor is github-actions[bot]"
+          exit 0
+        fi
+
+        if [[ "$ASSOCIATION" != "OWNER" && "$ASSOCIATION" != "MEMBER" && "$ASSOCIATION" != "COLLABORATOR" ]]; then
+          echo "authorized=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::Skipping — actor is not an authorized owner, member, or collaborator"
+          exit 0
+        fi
+
+        echo "authorized=true" >> "$GITHUB_OUTPUT"
