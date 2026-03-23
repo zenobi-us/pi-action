@@ -1,0 +1,119 @@
+name: Gitclaw Agent
+description: Sets up environment, notifies, initializes state, and runs the pi agent.
+
+inputs:
+  PiAuthJson:
+    description: >
+      PI auth.json contents (JSON string with provider API keys).
+      Pass from secrets. 
+      You should store this in secrets as a collapsed, compressed single line of json.
+    required: true
+  GitHubToken:
+    description: GitHub token with contents, issues, actions write permissions
+    required: true
+  BunVersion:
+    description: Bun version to install via mise
+    required: false
+    default: latest
+
+outputs:
+  response:
+    description: The agent's response text
+    value: ${{ steps.agent.outputs.response }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup mise + bun
+      uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+      with:
+        mise_toml: |
+          [tools]
+          bun = "${{ inputs.BunVersion }}"
+
+    - name: Write pi auth
+      shell: bash
+      env:
+        PI_AUTH_JSON: ${{ inputs.PiAuthJson }}
+      run: echo "$PI_AUTH_JSON" | jq -r . > workspace/.pi/auth.json
+
+    - name: Notify
+      id: notify
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.GitHubToken }}
+      run: |
+        if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+          rid=$(gh api "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
+            -f content=eyes --jq '.id' 2>/dev/null || true)
+        else
+          rid=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/reactions" \
+            -f content=eyes --jq '.id' 2>/dev/null || true)
+        fi
+        echo "reaction_id=${rid:-}" >> "$GITHUB_OUTPUT"
+
+    - name: Initialise state
+      shell: bash
+      run: >-
+        ${{ github.action_path }}/../agent.sh initialise-state
+        "${{ github.event_name == 'issue_comment' && 'comment' || 'issue' }}"
+        "${{ github.repository }}"
+        "${{ github.event.issue.number }}"
+        "${{ github.event.comment.id }}"
+        "${{ steps.notify.outputs.reaction_id }}"
+
+    - name: Build prompt
+      id: prompt
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.GitHubToken }}
+      run: |
+        if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+          prompt=$(jq -r '.comment.body' "$GITHUB_EVENT_PATH")
+        else
+          title=$(gh issue view "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --json title --jq '.title')
+          body=$(gh issue view "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --json body --jq '.body')
+          prompt=$(printf '%s\n\n%s' "$title" "$body")
+        fi
+        {
+          echo 'prompt<<GITCLAW_EOF'
+          echo "$prompt"
+          echo 'GITCLAW_EOF'
+        } >> "$GITHUB_OUTPUT"
+    - name: Run agent
+      id: agent
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.GitHubToken }}
+      run: |
+        response=$(${{ github.action_path }}/../agent.sh run "${{ steps.prompt.outputs.prompt }}")
+        {
+          echo 'response<<GITCLAW_EOF'
+          echo "$response"
+          echo 'GITCLAW_EOF'
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Cleanup reaction
+      if: always()
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.GitHubToken }}
+      run: |
+        STATE="/tmp/reaction-state.json"
+        if [[ ! -f "$STATE" ]]; then
+          exit 0
+        fi
+
+        rid=$(jq -r '.reactionId' "$STATE")
+        rtype=$(jq -r '.reactionTarget' "$STATE")
+        cid=$(jq -r '.commentId' "$STATE")
+
+        if [[ -z "$rid" || "$rid" == "null" ]]; then
+          exit 0
+        fi
+
+        if [[ "$rtype" == "comment" && -n "$cid" && "$cid" != "null" ]]; then
+          gh api "repos/${{ github.repository }}/issues/comments/${cid}/reactions/${rid}" -X DELETE 2>/dev/null || true
+        else
+          gh api "repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/reactions/${rid}" -X DELETE 2>/dev/null || true
+        fi
