@@ -1,0 +1,36 @@
+name: Gitclaw Agent
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+  actions: read
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: zenobi-us/pi-action/authorise@main
+        id: auth
+
+      - uses: zenobi-us/pi-action/agent@main
+        if: steps.auth.outputs.authorized == 'true'
+        id: agent
+        with:
+          PiAuthJson: ${{ secrets.PI_AUTH_JSON }}
+          GitHubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Comment on issue
+        if: steps.auth.outputs.authorized == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          response="${{ steps.agent.outputs.response }}"
+          gh issue comment "${{ github.event.issue.number }}" --body "${response:0:60000}"
