@@ -1,0 +1,9 @@
+[tools]
+shfmt = "3.13.0"
+actionlint = "1.7.11"
+action-validator = "0.8.0"
+shellcheck = "0.11.0"
+
+[tasks.lint]
+description = "Lint shell scripts with shellcheck"
+run = "shellcheck --severity=warning *.sh"
