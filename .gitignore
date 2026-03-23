@@ -1,0 +1,16 @@
+# mise
+.mise/local.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# pi agent local state
+.pi/auth.json
